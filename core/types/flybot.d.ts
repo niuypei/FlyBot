@@ -219,6 +219,8 @@ export interface BotFields {
 
 export interface CreateBotSpec {
   name: string
+  /** Existing absolute working directory. Invalid or removed directories fail; no workspace fallback. */
+  workDir?: string
   systemPrompt?: string
   /** Initial fields in the calling plugin's namespace. */
   fields?: Record<string, Json>

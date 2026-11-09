@@ -26,12 +26,13 @@ export function install(rt) {
 
   // `dir` is a working folder outside the team workspace. Such a Session is made by cwd
   // alone, so it joins no DSH workspace and the user's own project lists stay as they are.
-  async function createSession(title, { dir } = {}) {
+  async function createSession(title, { dir, strict = false } = {}) {
     // A Bot's tools run here too; while another dsh holds the team, a new Session would
     // belong to no saved Bot.
     const readOnly = rt.readOnly()
     if (readOnly !== undefined) throw new Error(readOnly)
     const usable = dir !== undefined && await rt.isFolder(dir)
+    if (strict && !usable) throw new Error(`workDir is not an existing directory: ${dir}`)
     if (dir !== undefined && !usable) rt.warn('ds-bot: the working folder %s is gone; %s starts in the team workspace', dir, title)
     const { sessionId } = await ctx.sessionController.create(usable ? { cwd: dir } : { workspaceId: await ensureWorkspace() })
     const agent = await rt.resolveAgent(sessionId)
@@ -61,7 +62,7 @@ export function install(rt) {
 
   // `pickModel` leaves the model to the user: the chat opens on a model card. So does a
   // Bot made when no model is served.
-  async function createBot({ name: botName, role = '', instructions = '', color, brief = '', createdBy, main = false, avatar, model, effort, workDir, pickModel = false, systemPrompt, fields, remote, external, ownerId: explicitOwnerId, hidden, ephemeral }) {
+  async function createBot({ name: botName, role = '', instructions = '', color, brief = '', createdBy, main = false, avatar, model, effort, workDir, strictWorkDir = false, pickModel = false, systemPrompt, fields, remote, external, ownerId: explicitOwnerId, hidden, ephemeral }) {
     const cleanName = cut(String(botName ?? '').trim(), 40).text
     // A friend's Bot (remote-chat.js) keeps its own name: it is not a team member, so
     // team names never clash with it and creating it starts no turn.
@@ -93,7 +94,8 @@ export function install(rt) {
     const effortId = modelRef === undefined ? undefined
       : effort !== undefined ? await rt.resolveEffort(modelRef, effort)
         : inheritedEffort !== undefined ? await rt.resolveEffort(modelRef, inheritedEffort).catch(() => undefined) : undefined
-    const dir = workDir === undefined || workDir === null ? undefined : await rt.cleanWorkDir(workDir)
+    // The UI elides the team folder. A plugin's explicit binding keeps it instead.
+    const dir = workDir === undefined || workDir === null ? undefined : await rt.cleanWorkDir(workDir, { keepTeam: strictWorkDir })
     // Every Bot binds to the team's one owner (#47), resolved before the Session exists
     // so a failure here leaves nothing to clean up.
     const ownerId = explicitOwnerId ?? rt.initialOwnerId()
@@ -102,7 +104,7 @@ export function install(rt) {
     const runPlugin = ephemeral && typeof ephemeral === 'object' && typeof ephemeral.plugin === 'string'
       ? ephemeral.plugin.slice(0, 80) : ''
     const run = runPlugin !== '' ? { plugin: runPlugin } : undefined
-    const id = await createSession(cleanName, { dir })
+    const id = await createSession(cleanName, { dir, strict: strictWorkDir })
     try {
       state.bots[id] = {
         id,
@@ -114,6 +116,7 @@ export function install(rt) {
         ...(modelRef ? { model: modelRef } : {}),
         ...(effortId ? { effort: effortId } : {}),
         ...(dir ? { workDir: dir } : {}),
+        ...(strictWorkDir ? { strictWorkDir: true } : {}),
         instructions: [String(instructions).trim(), parentBrief && brief ? `Why you exist: ${String(brief).trim()}` : ''].filter(Boolean).join('\n\n'),
         createdAt: Date.now(),
         createdBy: createdBy ?? null,
@@ -234,6 +237,8 @@ export function install(rt) {
     if (patch.permission !== undefined) await rt.setPermission(bot, patch.permission)
     const moved = moving && workDir !== bot.workDir
     if (moving) {
+      // An explicit folder edit replaces the plugin's original binding.
+      delete bot.strictWorkDir
       if (workDir === undefined) delete bot.workDir
       else bot.workDir = workDir
     }

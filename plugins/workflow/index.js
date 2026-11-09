@@ -59,6 +59,7 @@ export function apply(ctx, config = {}) {
             // #1544/#1582: whose switches cap the run's connectors. The caller is in `cappedBy` with
             // the graph's author; the run Bot carries no `createdBy`, which the roster reads as a maker.
             ...(spec.cappedBy ? { cappedBy: spec.cappedBy } : {}),
+            ...(spec.workDir !== undefined ? { workDir: spec.workDir } : {}),
             fields: { nodeId: spec.nodeId, tools: spec.tools ?? null },
           })
           liveNames.set(name, id)
@@ -132,6 +133,7 @@ export function apply(ctx, config = {}) {
         workflow: { type: 'string', required: true, description: 'Workflow id or exact name' },
         brief: { type: 'string', required: true, description: 'What the run should do' },
         task: { type: 'string', description: 'Task id, such as #1280. Omitted ids are generated.' },
+        workDir: { type: 'string', description: 'Existing absolute directory for every node in this run. Create the worktree before starting. An invalid or removed directory fails the run.' },
       },
       // fb.tools.register hands the calling Bot to execute() as the second argument's botId (#1544).
       execute: (args, ctx) => service.runNamed({ ...(args ?? {}), ...(ctx?.botId ? { callerBotId: ctx.botId } : {}) }),

@@ -959,7 +959,7 @@ export function install(rt) {
     if (signal.aborted) throw signal.reason
     const dir = rt.workDirOf(job)
     const intended = dir !== undefined && await rt.isFolder(dir) ? dir : rt.teamFolder()
-    const freshId = await rt.createSession(room ? `${bot.name} · ${room.name}` : bot.name, { dir })
+    const freshId = await rt.createSession(room ? `${bot.name} · ${room.name}` : bot.name, { dir, strict: bot.strictWorkDir === true })
     // The Bot's model wins over the previous request. Copying that header is what
     // kept a group Session on a provider the Bot had already left (#1127).
     const picked = freshPartModel(session.requestHeader()?.config, await rt.desiredModel(bot))
@@ -1121,7 +1121,9 @@ export function install(rt) {
     const cwd = agent.session.header?.cwd
     if (place === undefined || cwd === undefined || (midTurn && place.roomId !== undefined) || Date.now() < (folderRetry.get(agent.id) ?? 0)) return undefined
     const wanted = rt.workDirOf(place)
-    const target = wanted !== undefined && await rt.isFolder(wanted) ? wanted : rt.teamFolder()
+    const usable = wanted !== undefined && await rt.isFolder(wanted)
+    if (rt.botOf(place.botId)?.strictWorkDir && !usable) throw new Error(`workDir is not an existing directory: ${wanted}`)
+    const target = usable ? wanted : rt.teamFolder()
     return target === undefined || target === cwd ? undefined : target
   }
 

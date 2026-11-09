@@ -15579,3 +15579,45 @@ diff --git a/test/work-dir.test.js b/test/work-dir.test.js
    assert.deepEqual(third.created, [{ cwd: third.project }])
    assert.match(await third.tool('list_bots', {}, 'a'), new RegExp(`- Builder \\(Build, works in ${escapeRegExp(third.project)}\\)`))
  })
+@@ -379,3 +379,41 @@ test('the folder menu browses through the DSH folder picker', async (t) => {
+ function rootless() {
+   return join(tmpdir(), `ds-bot-work-dir-none-${process.pid}`)
+ }
++
++
++test('plugin-created run Bots start their real Sessions in the explicit directory', async (t) => {
++  const { ctx, project, team, created, agentOf, state, stop } = await start()
++  t.after(stop)
++  const fb = ctx.flybot.scope('workflow-workdir-test')
++  const id = await fb.bot.create({ name: 'Run worker', ephemeral: true, workDir: project })
++  assert.deepEqual(created.at(-1), { cwd: project })
++  assert.equal(agentOf(id).session.header.cwd, project)
++  assert.equal(state().bots[id].workDir, project)
++  // Even the team path is an explicit binding, rather than an omitted workspace choice.
++  await fb.bot.create({ name: 'Team worker', ephemeral: true, workDir: team })
++  assert.deepEqual(created.at(-1), { cwd: team })
++  await fb.bot.create({ name: 'Default worker', ephemeral: true })
++  assert.deepEqual(created.at(-1), { workspaceId: 'w1' })
++})
++
++test('plugin-created Bots refuse invalid explicit directories before creating a Session', async (t) => {
++  const { ctx, root, created, stop } = await start()
++  t.after(stop)
++  const file = join(root, 'plain-file')
++  writeFileSync(file, 'not a directory')
++  const fb = ctx.flybot.scope('workflow-workdir-test')
++  for (const workDir of [null, '', 'relative', file, join(root, 'missing')]) {
++    await assert.rejects(fb.bot.create({ name: 'Invalid worker', ephemeral: true, workDir }))
++  }
++  assert.equal(created.length, 0)
++})
++
++test('an explicit plugin working directory never falls back after it disappears', async (t) => {
++  const { ctx, project, created, agentOf, preStep, stop } = await start()
++  t.after(stop)
++  const id = await ctx.flybot.scope('workflow-workdir-test').bot.create({ name: 'Bound worker', workDir: project })
++  rmSync(project, { recursive: true })
++  await assert.rejects(preStep(id), /workDir is not an existing directory/)
++  assert.equal(created.length, 1)
++  assert.equal(agentOf(id).session.header.cwd, project)
++})

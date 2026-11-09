@@ -75,6 +75,16 @@ The server side of the patched `ds-bot` core (`core/`): the part of [ds-bot-core
 
 Add a new invariant under the heading it belongs to (or a new heading), not at the end of the page: parallel PRs then do not edit the same lines.
 
+### Plugin-created Bots bind to their explicit directory
+
+`CreateBotSpec.workDir` is an optional absolute existing directory. `hooks.js` rejects empty,
+non-string and relative values, then `roster.js` applies the usual DSH-data folder guard and
+canonicalizes the path. The Session is created with `cwd`, without joining a DSH workspace.
+An explicit team-workspace path stays an explicit binding too. A private `strictWorkDir` marker
+persists that choice: creation, fresh parts and the pre-step folder gate fail if the directory
+disappears, rather than moving the Bot to the team workspace. Omission retains the previous
+workspace behavior. This changes neither connector ceilings nor permission presets.
+
 ### The health answer is four fields, and unauthenticated on purpose (#2128)
 
 `GET /api/health` answers `200` with `ok`, `version`, `commit` and `startedAt`, and nothing else: the

@@ -1158,15 +1158,17 @@ diff --git a/src/host/parts.js b/src/host/parts.js
      }
    }
  
-@@ -765,16 +765,43 @@ export function install(rt) {
+@@ -764,17 +764,44 @@ export function install(rt) {
+     if (signal.aborted) throw signal.reason
      const dir = rt.workDirOf(job)
      const intended = dir !== undefined && await rt.isFolder(dir) ? dir : rt.teamFolder()
-     const freshId = await rt.createSession(room ? `${bot.name} · ${room.name}` : bot.name, { dir })
+-    const freshId = await rt.createSession(room ? `${bot.name} · ${room.name}` : bot.name, { dir })
 -    const route = session.requestHeader()?.config
 -    const ref = route?.provider && route?.model ? `${route.provider}/${route.model}` : await rt.desiredModel(bot)
 -    if (ref !== undefined) {
 -      const effort = route?.reasoningEffort ?? await rt.desiredEffort(bot, ref)
 -      await rt.selectSessionModel(freshId, { ...splitRef(ref), ...(effort === undefined ? {} : { reasoningEffort: effort }) })
++    const freshId = await rt.createSession(room ? `${bot.name} · ${room.name}` : bot.name, { dir, strict: bot.strictWorkDir === true })
 +    // The Bot's model wins over the previous request. Copying that header is what
 +    // kept a group Session on a provider the Bot had already left (#1127).
 +    const picked = freshPartModel(session.requestHeader()?.config, await rt.desiredModel(bot))
@@ -1311,6 +1313,17 @@ diff --git a/src/host/parts.js b/src/host/parts.js
      entry.switched = true
 -    startSwitch(agent, { resume: midTurn, carry: payload.messages, info: midTurn ? entry.info : undefined, joined: midTurn ? [...(entry.joined ?? [])] : undefined, ...options })
      return { kind: 'reject' }
+   }
+ 
+@@ -872,7 +872,9 @@ export function install(rt) {
+     const cwd = agent.session.header?.cwd
+     if (place === undefined || cwd === undefined || (midTurn && place.roomId !== undefined) || Date.now() < (folderRetry.get(agent.id) ?? 0)) return undefined
+     const wanted = rt.workDirOf(place)
+-    const target = wanted !== undefined && await rt.isFolder(wanted) ? wanted : rt.teamFolder()
++    const usable = wanted !== undefined && await rt.isFolder(wanted)
++    if (rt.botOf(place.botId)?.strictWorkDir && !usable) throw new Error(`workDir is not an existing directory: ${wanted}`)
++    const target = usable ? wanted : rt.teamFolder()
+     return target === undefined || target === cwd ? undefined : target
    }
  
 @@ -927,15 +927,19 @@ export function install(rt) {

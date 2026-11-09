@@ -22,6 +22,22 @@ The **Add link** row applies the drawer's pair rule before it saves (#2173): a p
 
 A Condition (`when`) or Loop (`until`) link takes its output name from the **From** node's declared `outputs` (#2178): the field is a select over exactly those names, **Add link** waits for one, and a node that declares none keeps the text box for an older graph. The host still refuses a name it cannot honour — `cleanWhen` and `PORT_RE` are unchanged.
 
+## Run working directory
+
+`run_workflow({ workflow, brief, task?, workDir? })` and
+`flybot/workflow/assign({ workflowId, taskId, title, brief?, workDir? })` accept one existing
+absolute directory for the entire run. The caller creates its worktree before assignment.
+The service resolves symlinks at admission and retains the canonical `workDir` in the task,
+FIFO entry, persisted run, and task-facts cache (a re-dispatch that omits it keeps that binding).
+`workflow/state` exposes it on queued tasks and `run.task`. Each execution attempt validates
+it again, including after spawning, so a deleted queued directory refuses startup and any
+partially created Bots are released. The queued failure is recorded in the workflow chat and the next eligible task still starts.
+If startup cleanup cannot remove a Bot, its id is persisted as an orphan for `reap` to retry.
+`spawnAll` carries the value to every node, and the plugin passes it through `fb.bot.create`
+to the host's Session `cwd`; it is never a prompt-only instruction. Invalid explicit values
+cannot fall back to the team workspace. Omission keeps the existing workspace behavior.
+This is a run property: graph nodes do not configure separate directories or inherit rights.
+
 ## Owns
 
 Everything in `plugins/workflow/`: the graph rules, the run store, the matcher, the browser chat and the flowchart canvas.

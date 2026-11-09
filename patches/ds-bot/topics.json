@@ -62,6 +62,7 @@
   ],
   "0002-flybot-api-host": [
     "index.js",
+    "src/host/folders.js",
     "src/host/store.js",
     "src/host/roster.js",
     "src/host/tools.js",

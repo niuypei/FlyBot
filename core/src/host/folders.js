@@ -38,8 +38,8 @@ export function install(rt) {
   }
 
   // Saved as the real path, which is what a Session's cwd shows. Undefined means the
-  // team workspace.
-  async function cleanWorkDir(input) {
+  // team workspace; plugin creation keeps an explicitly chosen team path.
+  async function cleanWorkDir(input, { keepTeam = false } = {}) {
     const text = unquote(input)
     if (text === '') return undefined
     const expanded = expandHome(text)
@@ -52,7 +52,7 @@ export function install(rt) {
     }
     if (!(await isFolder(path))) throw new Error(`${text} is a file, not a folder`)
     if (await guarded(path)) throw new Error(`${path} holds DeepSeek Harness data, so Bots cannot work there`)
-    return path === teamFolder() ? undefined : path
+    return !keepTeam && path === teamFolder() ? undefined : path
   }
 
   // Every Session of a Bot: its own chat and its conversation in each of its groups.
