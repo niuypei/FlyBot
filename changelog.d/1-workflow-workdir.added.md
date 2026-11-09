@@ -1,0 +1,1 @@
+Workflow runs accept a shared `workDir` through `run_workflow` and `workflow/assign`, persist it through the FIFO queue, and create every node Bot in that actual Session directory. Invalid or removed explicit directories fail instead of falling back to the team workspace. [#1](https://github.com/niuypei/FlyBot/issues/1).

@@ -10,6 +10,7 @@
 // Types: ds-bot/types/flybot.d.ts. Plugins call flybot.scope('<plugin>') to get the
 // same API with their own field namespace; the unscoped API uses namespace 'shared'.
 import { createHash, randomUUID } from 'node:crypto'
+import { isAbsolute } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { isApprovalWaiting } from '../shared/approval-waiting.js'
 import { canRetry } from '../shared/held-retry.js'
@@ -187,14 +188,18 @@ export function install(rt) {
     return ids
   }
 
-  async function create({ name, systemPrompt, fields, role, instructions, createdBy, cappedBy, plugin = SHARED, hidden, ephemeral, model, tools, permission } = {}) {
+  async function create({ name, systemPrompt, fields, role, instructions, createdBy, cappedBy, plugin = SHARED, hidden, ephemeral, model, tools, permission, workDir } = {}) {
     checkName('plugin', plugin)
+    if (workDir !== undefined && (typeof workDir !== 'string' || workDir.trim() === '' || !isAbsolute(workDir))) {
+      throw new Error('workDir must be an absolute path to an existing directory')
+    }
     await rt.load()
     const stepTools = ephemeral === true ? cleanStepTools(tools) : []
     const caps = ephemeral === true ? cleanCappedBy(cappedBy) : []
     const preset = ephemeral === true ? String(permission ?? '').trim() : ''
     const bot = await rt.createBot({
       name, role, instructions, createdBy,
+      ...(workDir !== undefined ? { workDir, strictWorkDir: true } : {}),
       ...(systemPrompt ? { systemPrompt } : {}),
       ...(fields && Object.keys(fields).length > 0 ? { fields: { [plugin]: fields } } : {}),
       ...(typeof model === 'string' && model.trim() ? { model: model.trim() } : {}),

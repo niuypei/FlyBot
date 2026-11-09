@@ -51,6 +51,7 @@ export async function spawnAll(nodes, roster, spawn, workflowModel = '', caps = 
     for (const node of nodes) {
       const spec = nodeConfig(node, roster, workflowModel)
       if (capping.length > 0) spec.cappedBy = capping
+      if (caps.workDir !== undefined) spec.workDir = caps.workDir
       const id = await spawn(spec)
       if (typeof id !== 'string' || id === '') throw new Error('The run could not start a Bot')
       made.push(id)

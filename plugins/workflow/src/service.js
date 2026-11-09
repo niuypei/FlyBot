@@ -3,8 +3,8 @@
 // (default 2). A live node stays running until its Bot replies.
 
 import { randomBytes } from 'node:crypto'
-import { copyFileSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { copyFileSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { isAbsolute, join } from 'node:path'
 import { releaseAll, spawnAll } from './ephemeral.js'
 import {
   chainLabel, cleanLine, cleanPorts, cleanPrompt, cleanTools, completeNode, cutCodePoints, doneCount, failNode, freshStatus, layerMarks,
@@ -35,7 +35,7 @@ const MAX_HELD_TASKS = 20
 const MAX_HELD_LIMIT = 200
 // #1869: the fields `workflow/assign` reads. Anything else is named back in
 // `ignored`, because a typo (`brif`) used to be dropped in silence.
-const ASSIGN_FIELDS = new Set(['workflowId', 'taskId', 'id', 'title', 'brief', 'callerBotId', 'projectId', 'botId', 'handoff', 'handoffContext', 'acceptance', 'evidence'])
+const ASSIGN_FIELDS = new Set(['workflowId', 'taskId', 'id', 'title', 'brief', 'workDir', 'callerBotId', 'projectId', 'botId', 'handoff', 'handoffContext', 'acceptance', 'evidence'])
 // A brief is a work order, not a sentence: 20–40 lines is the normal case. The cap
 // is far above what a dispatch can carry, so it only stops an unbounded paste.
 const MAX_BRIEF = 8000
@@ -59,6 +59,20 @@ function stepTimeoutValue(raw) {
     throw new Error(`stepTimeoutMinutes is an integer from ${MIN_STEP_TIMEOUT_MINUTES} to ${MAX_STEP_TIMEOUT_MINUTES}`)
   }
   return value
+}
+
+// An explicit directory belongs to the whole run. Resolve symlinks once at admission,
+// then check that same directory again when a parked task finally gets a slot.
+function checkedWorkDir(value) {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value.trim() === '' || !isAbsolute(value)) {
+    throw new Error('workDir must be an absolute path to an existing directory')
+  }
+  try {
+    const dir = realpathSync.native(value)
+    if (statSync(dir).isDirectory()) return dir
+  } catch { /* Report a missing or inaccessible directory the same way. */ }
+  throw new Error(`workDir is not an existing directory: ${value}`)
 }
 
 function idOf(prefix) {
@@ -481,7 +495,7 @@ export function createWorkflowService({
         stepTimeoutMinutes: stepTimeoutMinutesOf(item),
         activeCount: runningOf(laneOf(item.id)).length,
         queueDepth: (laneOf(item.id).queue ?? []).length,
-        queue: (laneOf(item.id).queue ?? []).map(task => ({ id: task.id, title: task.title })),
+        queue: (laneOf(item.id).queue ?? []).map(task => ({ id: task.id, title: task.title, ...(task.workDir !== undefined ? { workDir: task.workDir } : {}) })),
         history: [...(laneOf(item.id).history ?? [])],
         runs: [...runningOf(laneOf(item.id)), ...failedSiblings(laneOf(item.id))].map(run => publicRun(item, run)),
         preview: rowPreview(item, previewRun(item.id)),
@@ -897,6 +911,7 @@ export function createWorkflowService({
       id: task.id,
       title: task.title,
       ...(task.brief ? { brief: task.brief } : {}),
+      ...(task.workDir !== undefined ? { workDir: task.workDir } : {}),
       ...(task.callerBotId ? { callerBotId: task.callerBotId } : {}),
       ...(task.projectId ? { projectId: task.projectId } : {}),
       ...(task.handoff ? { handoff: task.handoff } : {}),
@@ -941,7 +956,7 @@ export function createWorkflowService({
       const begun = beginRun(next.item, next.task)
       if (begun.ok === false) {
         noteUnstarted(next.item, begun.error)
-        return
+        continue
       }
     }
   }
@@ -959,7 +974,7 @@ export function createWorkflowService({
       const started = await startLive(next.item, next.task)
       if (started?.ok === false) {
         noteUnstarted(next.item, started.error)
-        return
+        continue
       }
     }
   }
@@ -1069,6 +1084,7 @@ export function createWorkflowService({
   }
 
   function beginRun(item, task, ephemeral) {
+    try { checkedWorkDir(task.workDir) } catch (error) { return refuse(error) }
     const holes = missingProviders(item)
     if (holes.length > 0) return { ok: false, error: `Node ${holes[0].nodeId} input ${holes[0].name} has no upstream provider` }
     let run = { ...blankRun(item, task, now(), []), live: true }
@@ -1098,7 +1114,16 @@ export function createWorkflowService({
     return { ok: true, run }
   }
 
+  async function releaseUnstarted(ids) {
+    const failed = await releaseAll(ids, release, warn)
+    if (failed.length > 0) {
+      noteOrphans(state, failed)
+      write()
+    }
+  }
+
   async function startLive(item, task) {
+    try { checkedWorkDir(task.workDir) } catch (error) { return refuse(error) }
     let ephemeral
     if (typeof spawn === 'function') {
       const holes = missingProviders(item)
@@ -1109,15 +1134,16 @@ export function createWorkflowService({
         ephemeral = await spawnAll(item.nodes, bots() ?? [], spawn, item.model ?? '', {
           callerBotId: task.callerBotId,
           authorBotId: item.authoredBy,
+          ...(task.workDir !== undefined ? { workDir: task.workDir } : {}),
         })
       } catch (error) {
-        await releaseAll(error.spawned ?? [], release, warn)
+        await releaseUnstarted(error.spawned ?? [])
         return refuse(error)
       }
     }
     const begun = beginRun(item, task, ephemeral)
     if (begun.ok === false) {
-      if (ephemeral) await releaseAll(Object.values(ephemeral), release, warn)
+      if (ephemeral) await releaseUnstarted(Object.values(ephemeral))
       return begun
     }
     let run = begun.run
@@ -1148,6 +1174,7 @@ export function createWorkflowService({
       ...(task.projectId ? { projectId: task.projectId } : {}),
       // #1869: the brief stays on the parked card, on disk and until the run starts.
       ...(task.brief ? { brief: task.brief } : {}),
+      ...(task.workDir !== undefined ? { workDir: task.workDir } : {}),
       // #1862: and the handoff the shadow pass records a verdict for.
       ...(task.handoff ? { handoff: task.handoff } : {}),
       ...(task.handoffContext ? { handoffContext: task.handoffContext } : {}),
@@ -1487,10 +1514,13 @@ export function createWorkflowService({
       state.briefs ??= {}
       const prior = state.briefs[task.id] ?? {}
       const brief = body.brief === undefined ? prior.brief || '' : callBrief
+      let workDir
+      try { workDir = checkedWorkDir(body.workDir === undefined ? prior.workDir : body.workDir) } catch (error) { return answer(refuse(error)) }
+      if (workDir !== undefined) task.workDir = workDir
       // #2475: a lane that no longer exists records no handoff; delete() drops its
       // cache entries, and this guard covers an entry written before that fix.
       const kept = prior.workflowId && prior.workflowId !== workflowId ? workflow(prior.workflowId) : undefined
-      state.briefs[task.id] = { ...(brief ? { brief } : {}), workflowId }
+      state.briefs[task.id] = { ...(brief ? { brief } : {}), ...(workDir !== undefined ? { workDir } : {}), workflowId }
       if (brief) task.brief = brief
       if (kept) {
         task.handoff = { from: kept.name, to: item.name, at: now(), reason: 're-dispatched to another lane' }
@@ -1947,7 +1977,7 @@ export function createWorkflowService({
       const title = cleanLine(body.title || brief.split('\n')[0], 300)
       if (!title) return { ok: false, error: 'A run needs a brief' }
       const taskId = cleanLine(body.task || body.taskId, 80) || `task-${now().toString(36)}`
-      return this.assign({ workflowId: item.id, taskId, title, ...(brief ? { brief } : {}), ...(body.callerBotId ? { callerBotId: body.callerBotId } : {}) })
+      return this.assign({ workflowId: item.id, taskId, title, ...(brief ? { brief } : {}), ...(body.callerBotId ? { callerBotId: body.callerBotId } : {}), ...(body.workDir !== undefined ? { workDir: body.workDir } : {}) })
     },
     // Auto-assign an open board task. A miss leaves the task untouched.
     // A stored claim is not a life sentence (#1647): when the card itself now
@@ -2029,7 +2059,7 @@ export function createWorkflowService({
       // `assign` to keep whatever the lane cached, so a card the author cleared
       // would bring the old text back; an empty string is the explicit clear
       // `#2475` defined, and a card that still holds facts passes them verbatim.
-      const assigned = this.assign({ workflowId: decision.id, taskId, title, brief: typeof task.brief === 'string' ? task.brief : '' })
+      const assigned = this.assign({ workflowId: decision.id, taskId, title, brief: typeof task.brief === 'string' ? task.brief : '', ...(task.workDir !== undefined ? { workDir: task.workDir } : {}) })
       const finish = (value) => {
         if (value?.ok === false) return value
         logSource()

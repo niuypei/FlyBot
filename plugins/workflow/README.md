@@ -26,6 +26,24 @@ A second task does not replace a run that is already going, and it does not rele
 
 Each workflow allows `maxConcurrent` live runs at once. The default is 2. The value is an integer from 1 to 8, set on create (`maxConcurrent`), with `workflow/concurrency` (`{ workflowId, maxConcurrent }`), or in Settings → Workflow graphs. A task that does not fit is queued. When any run finishes, the oldest queued task whose workflow still has room starts, whichever workflow it belongs to. A new assign waits behind a task already queued there. Lowering the cap does not stop a run that has already started. History keeps finished and failed runs only.
 
+## Run in a project directory
+
+Pass `workDir` to `run_workflow` or `flybot/workflow/assign` to start every node in the same
+existing absolute directory. Create a worktree before starting the run, for example:
+
+```js
+run_workflow({ workflow: 'Review and implement', task: 'change-42', brief: 'Implement the change', workDir: '/worktrees/change-42' })
+// Equivalent API assignment:
+// flybot/workflow/assign({ workflowId, taskId: 'change-42', title: 'Implement the change', workDir: '/worktrees/change-42' })
+```
+
+The canonical path stays with queued tasks and persisted runs. Invalid values are refused;
+if the directory disappears while queued, the attempt fails in the workflow chat before any
+node starts. Every Bot's actual Session uses that directory, and it never falls back to the
+team workspace. Omitting the field uses the existing default; re-dispatching an existing task
+without the field retains its stored directory. Directories are shared within a run, not
+configured per node, and do not change permissions or connectors.
+
 ## Inputs and outputs
 
 A node may declare up to eight inputs and eight outputs. A name matches `^[a-z][a-z0-9-]{0,40}$`, and the type defaults to `text`. Mark an input `required: true` when the node cannot start without it.
@@ -56,7 +74,7 @@ A reply that says the model could not answer (`could not answer your message` or
 
 A local Bot uses the same store:
 
-- `run_workflow` — `workflow` (id or exact name) and `brief` (the task). Optional `task` id. This joins the same queue a manual assign uses.
+- `run_workflow` — `workflow` (id or exact name) and `brief` (the task). Optional `task` id and `workDir` (an existing absolute directory for all nodes). This joins the same queue a manual assign uses.
 - `define_workflow` — `name`, `nodes` (`{ id, name, prompt?, role?, model?, tools?, botId?, inputs?, outputs?, x?, y? }`), `edges` (`{ from, to, when?, loop?, max?, until?, onFail? }`). `prompt` is that node's Bot system prompt. `tools` names the connectors the ephemeral Bot may call (`github`, `composio`); a node that names none reaches none. `botId` is optional. `inputs` and `outputs` are `{ name, type?, required? }`. `when` chooses an edge; `loop: true` with `max` is the only cycle. Pass `workflow` to replace one. A friend's Bot is refused. This writes the same graph Settings and the flowchart edit.
 
 ## Install

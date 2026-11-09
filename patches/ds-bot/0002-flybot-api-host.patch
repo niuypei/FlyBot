@@ -127,6 +127,29 @@ diff --git a/src/host/constants.js b/src/host/constants.js
  // Answers a group gives to what members post after the round moved on (their finished
  // work, mostly), before the user speaks there again.
  export const ROOM_LATE_ROUNDS = 10
+diff --git a/src/host/folders.js b/src/host/folders.js
+--- a/src/host/folders.js
++++ b/src/host/folders.js
+@@ -38,8 +38,8 @@ export function install(rt) {
+   }
+ 
+   // Saved as the real path, which is what a Session's cwd shows. Undefined means the
+-  // team workspace.
+-  async function cleanWorkDir(input) {
++  // team workspace; plugin creation keeps an explicitly chosen team path.
++  async function cleanWorkDir(input, { keepTeam = false } = {}) {
+     const text = unquote(input)
+     if (text === '') return undefined
+     const expanded = expandHome(text)
+@@ -52,7 +52,7 @@ export function install(rt) {
+     }
+     if (!(await isFolder(path))) throw new Error(`${text} is a file, not a folder`)
+     if (await guarded(path)) throw new Error(`${path} holds DeepSeek Harness data, so Bots cannot work there`)
+-    return path === teamFolder() ? undefined : path
++    return !keepTeam && path === teamFolder() ? undefined : path
+   }
+ 
+   // Every Session of a Bot: its own chat and its conversation in each of its groups.
 diff --git a/src/host/home-lock.js b/src/host/home-lock.js
 --- a/src/host/home-lock.js
 +++ b/src/host/home-lock.js
@@ -182,7 +205,22 @@ diff --git a/src/host/roster.js b/src/host/roster.js
      state.workspaceId = workspace.id
      await rt.save()
      return workspace.id
-@@ -56,69 +56,103 @@ export function install(rt) {
+@@ -23,12 +23,13 @@ export function install(rt) {
+ 
+   // `dir` is a working folder outside the team workspace. Such a Session is made by cwd
+   // alone, so it joins no DSH workspace and the user's own project lists stay as they are.
+-  async function createSession(title, { dir } = {}) {
++  async function createSession(title, { dir, strict = false } = {}) {
+     // A Bot's tools run here too; while another dsh holds the team, a new Session would
+     // belong to no saved Bot.
+     const readOnly = rt.readOnly()
+     if (readOnly !== undefined) throw new Error(readOnly)
+     const usable = dir !== undefined && await rt.isFolder(dir)
++    if (strict && !usable) throw new Error(`workDir is not an existing directory: ${dir}`)
+     if (dir !== undefined && !usable) rt.warn('ds-bot: the working folder %s is gone; %s starts in the team workspace', dir, title)
+     const { sessionId } = await ctx.sessionController.create(usable ? { cwd: dir } : { workspaceId: await ensureWorkspace() })
+     const agent = await rt.resolveAgent(sessionId)
+@@ -56,69 +56,105 @@ export function install(rt) {
      return `${stem} ${index}`
    }
  
@@ -195,7 +233,7 @@ diff --git a/src/host/roster.js b/src/host/roster.js
 -    if (rt.findBot(cleanName)) throw new Error(`A Bot named ${cleanName} already exists`)
 +  // `pickModel` leaves the model to the user: the chat opens on a model card. So does a
 +  // Bot made when no model is served.
-+  async function createBot({ name: botName, role = '', instructions = '', color, brief = '', createdBy, main = false, avatar, model, effort, workDir, pickModel = false, systemPrompt, fields, remote, external, ownerId: explicitOwnerId, hidden, ephemeral }) {
++  async function createBot({ name: botName, role = '', instructions = '', color, brief = '', createdBy, main = false, avatar, model, effort, workDir, strictWorkDir = false, pickModel = false, systemPrompt, fields, remote, external, ownerId: explicitOwnerId, hidden, ephemeral }) {
 +    const cleanName = cut(String(botName ?? '').trim(), 40).text
 +    // A friend's Bot (remote-chat.js) keeps its own name: it is not a team member, so
 +    // team names never clash with it and creating it starts no turn.
@@ -211,6 +249,8 @@ diff --git a/src/host/roster.js b/src/host/roster.js
      // The model is fixed at creation, so a later change of the DSH default leaves it alone.
 -    const modelRef = model ? await rt.resolveModel(model) : pickModel ? undefined : await rt.defaultModel()
 -    const effortId = modelRef !== undefined && effort !== undefined ? await rt.resolveEffort(modelRef, effort) : undefined
+-    const dir = workDir === undefined || workDir === null ? undefined : await rt.cleanWorkDir(workDir)
+-    const id = await createSession(cleanName, { dir })
 +    // A Bot made by another Bot (create_bot, a tree child) with no model named starts on its
 +    // maker's effective model and thinking level (#410; the level resolved against that
 +    // model, as applyModel does for the maker), set before its first request, so it never
@@ -229,7 +269,8 @@ diff --git a/src/host/roster.js b/src/host/roster.js
 +    const effortId = modelRef === undefined ? undefined
 +      : effort !== undefined ? await rt.resolveEffort(modelRef, effort)
 +        : inheritedEffort !== undefined ? await rt.resolveEffort(modelRef, inheritedEffort).catch(() => undefined) : undefined
-     const dir = workDir === undefined || workDir === null ? undefined : await rt.cleanWorkDir(workDir)
++    // The UI elides the team folder. A plugin's explicit binding keeps it instead.
++    const dir = workDir === undefined || workDir === null ? undefined : await rt.cleanWorkDir(workDir, { keepTeam: strictWorkDir })
 +    // Every Bot binds to the team's one owner (#47), resolved before the Session exists
 +    // so a failure here leaves nothing to clean up.
 +    const ownerId = explicitOwnerId ?? rt.initialOwnerId()
@@ -238,7 +279,7 @@ diff --git a/src/host/roster.js b/src/host/roster.js
 +    const runPlugin = ephemeral && typeof ephemeral === 'object' && typeof ephemeral.plugin === 'string'
 +      ? ephemeral.plugin.slice(0, 80) : ''
 +    const run = runPlugin !== '' ? { plugin: runPlugin } : undefined
-     const id = await createSession(cleanName, { dir })
++    const id = await createSession(cleanName, { dir, strict: strictWorkDir })
      try {
        state.bots[id] = {
          id,
@@ -252,6 +293,7 @@ diff --git a/src/host/roster.js b/src/host/roster.js
          ...(effortId ? { effort: effortId } : {}),
          ...(dir ? { workDir: dir } : {}),
 -        instructions: String(instructions).trim(),
++        ...(strictWorkDir ? { strictWorkDir: true } : {}),
 +        instructions: [String(instructions).trim(), parentBrief && brief ? `Why you exist: ${String(brief).trim()}` : ''].filter(Boolean).join('\n\n'),
          createdAt: Date.now(),
          createdBy: createdBy ?? null,
@@ -388,7 +430,15 @@ diff --git a/src/host/roster.js b/src/host/roster.js
      if (patch.model !== undefined) {
        if (patch.model === null || patch.model === '') delete bot.model
        else bot.model = await rt.resolveModel(patch.model)
-@@ -212,20 +212,23 @@ export function install(rt) {
+@@ -206,26 +206,31 @@ export function install(rt) {
+     if (patch.permission !== undefined) await rt.setPermission(bot, patch.permission)
+     const moved = moving && workDir !== bot.workDir
+     if (moving) {
++      // An explicit folder edit replaces the plugin's original binding.
++      delete bot.strictWorkDir
+       if (workDir === undefined) delete bot.workDir
+       else bot.workDir = workDir
+     }
      await rt.save()
      if (modelChanged) await rt.applyModel(bot, { force: true })
      if (moved) void rt.followFolder(bot.id)
